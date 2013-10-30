@@ -182,8 +182,8 @@ AbstractOSCDataSpace {
 
 OSCDataSpace : AbstractOSCDataSpace {
 
-	*new {|addrBook, oscPath = '/oscDataSpace'|
-		^super.new.init(addrBook, oscPath);
+	*new {|addrBook, mePeer, oscPath = '/oscDataSpace'|
+		^super.new.init(addrBook, mePeer, oscPath);
 	}
 
 	makeOSCFunc {
@@ -195,7 +195,7 @@ OSCDataSpace : AbstractOSCDataSpace {
 				dict[key] = val;
 				this.changed(\val, key, val);
 			}, {"OSCDataSpace access attempt from unrecognised addr: %\n".format(addr).warn;});
-		}, oscPath, recvPort: addrBook.me.addr.port).fix;
+		}, oscPath, recvPort: mePeer.addr.port).fix;
 	}
 
 	getPairs { ^dict.getPairs }
