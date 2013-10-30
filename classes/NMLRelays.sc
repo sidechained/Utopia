@@ -44,11 +44,15 @@ CodeRelay {
 // However, this could cause problems if you send to someone with a different version of SC
 // Possibly using the textArchive should be an option
 SynthDescRelay {
-	var addrBook, oscPath, libName, encryptor, lib, oscFunc;
+
+	// DONE: added sync functionality
+	// TODO:
+
+	var addrBook, mePeer, oscPath, libName, encryptor, lib, oscFunc, syncRequestOSCFunc;
 	var justAddedRemote = false;
 
-	*new {|addrBook, oscPath = '/synthDefRelay', libName = \global, encryptor|
-		^super.newCopyArgs(addrBook, oscPath, libName).init;
+	*new {|addrBook, mePeer, oscPath = '/synthDefRelay', libName = \global, encryptor|
+		^super.newCopyArgs(addrBook, mePeer, oscPath, libName).init;
 	}
 
 	init {
@@ -56,25 +60,28 @@ SynthDescRelay {
 		lib.addDependant(this);
 		encryptor = encryptor ?? { NonEncryptor }; // NonEncryptor uses noops
 		this.makeOSCFunc;
+		this.makeSyncRequestOSCFunc; // MOD
 	}
 
 	makeOSCFunc {
 		oscFunc = OSCFunc({|msg, time, addr|
-			var desc, defcode, stream;
-			if(addrBook.addrs.includesEqual(addr), {
-				stream = CollStream(encryptor.decryptBytes(msg[2]));
+			var defCompileString, defBytes, port, stream;
+			# defCompileString, defBytes, port = msg.drop(1);
+			if(addrBook.addrs.includesEqual(NetAddr(addr.ip, port)), {
+				var desc, defcode;
+				stream = CollStream(encryptor.decryptBytes(defBytes));
 				stream.getInt32; // 'SCgf'
 				stream.getInt32; // version
 				stream.getInt16; // 1
 				desc = SynthDesc.new.readSynthDef2(stream, true);
-				defcode = encryptor.decryptText(msg[1]);
+				defcode = encryptor.decryptText(defCompileString);
 				if(desc.isKindOf(SynthDesc), { // check for safety
 					justAddedRemote = true;
 					lib.add(desc);
 					this.changed(\synthDesc, desc, defcode.asString);
 				}, { "SynthDescRelay received non-SynthDesc object: %. Object discarded".format(desc).warn; });
 			}, {"SynthDescRelay access attempt from unrecognised addr: %\n".format(addr).warn;});
-		}, oscPath, recvPort: addrBook.me.addr.port).fix;
+		}, oscPath, recvPort: mePeer.addr.port).fix;
 	}
 
 	free {
@@ -95,21 +102,50 @@ SynthDescRelay {
 					desc = moreArgs[0];
 					if(desc.isKindOf(SynthDesc), { // check for safety
 						def = desc.def;
-						addrBook.sendExcluding(addrBook.me.name, oscPath, encryptor.encryptText(def.asCompileString), encryptor.encryptBytes(def.asBytes));
+						addrBook.sendExcludingId(mePeer.id, oscPath, encryptor.encryptText(def.asCompileString), encryptor.encryptBytes(def.asBytes), mePeer.addr.port);
 					}, { "SynthDescRelay updated with non-SynthDesc object: %".format(desc).warn; });
 				}, { justAddedRemote = false });
 			}
 		)
 	}
+
+	sync {|addr|
+		var syncAddr;
+		// look for the first online one who's not me
+		var firstOnlinePeer = addrBook.peers.reject{|peer| peer == mePeer }.detect{|peer| peer.online };
+		if (firstOnlinePeer.notNil, {
+			syncAddr = addr ?? { firstOnlinePeer.addr };
+			syncAddr.sendMsg(oscPath ++ "-sync", mePeer.addr.port);
+		});
+	}
+
+	makeSyncRequestOSCFunc {
+		// sends back to the existing oscFunc i.e. see makeOSCFunc above
+		syncRequestOSCFunc = OSCFunc({|msg, time, addr|
+			var port, includedSynthDescs, msgToSend;
+			# port = msg.drop(1);
+			// only send synthDescs which are not excluded from sync:
+			includedSynthDescs = SynthDescLib.all.at(mePeer.id.asSymbol).synthDescs;
+			// includedSynthDescs = SynthDescLib.global.synthDescs.reject{arg desc; desc.metadata == \excludedFromSync};
+			includedSynthDescs.do{arg desc;
+				var def;
+				def = desc.def;
+				msgToSend = [oscPath, encryptor.encryptText(def.asCompileString), encryptor.encryptBytes(def.asBytes), mePeer.addr.port];
+				NetAddr(addr.ip, port).sendMsg(*msgToSend);
+			};
+		}, oscPath ++ "-sync", recvPort: mePeer.addr.port).fix;
+	}
+
 }
 
 // shared network dataspaces
 
 AbstractOSCDataSpace {
-	var addrBook, oscPath, oscFunc, syncRecOSCFunc, syncRequestOSCFunc, dict;
+	var addrBook, mePeer, oscPath, oscFunc, syncRecOSCFunc, syncRequestOSCFunc, dict;
 
-	init {|argAddrBook, argOSCPath|
+	init {|argAddrBook, argMePeer, argOSCPath|
 		addrBook = argAddrBook;
+		mePeer = argMePeer;
 		oscPath = argOSCPath;
 		dict = IdentityDictionary.new;
 		this.makeSyncRequestOSCFunc;
@@ -128,10 +164,11 @@ AbstractOSCDataSpace {
 
 	makeSyncRequestOSCFunc {
 		syncRequestOSCFunc = OSCFunc({|msg, time, addr|
-			var pairs;
+			var port, pairs;
+			# port = msg.drop(1);
 			pairs = this.getPairs;
-			addr.sendMsg(*([oscPath ++ "-sync-reply"] ++ pairs));
-		}, oscPath ++ "-sync", recvPort: addrBook.me.addr.port).fix;
+			NetAddr(addr.ip, port).sendMsg(*([oscPath ++ "-sync-reply"] ++ pairs));
+		}, oscPath ++ "-sync", recvPort: mePeer.addr.port).fix;
 	}
 
 	getPairs { this.subclassResponsibility }
@@ -192,41 +229,50 @@ OSCDataSpace : AbstractOSCDataSpace {
 // However, this could cause problems if you send to someone with a different version of SC
 // Possibly using the textArchive should be an option
 OSCObjectSpace : AbstractOSCDataSpace {
+
 	var <>acceptEvents, encryptor;
 
-	*new {|addrBook, acceptEvents = false, oscPath = '/oscObjectSpace', encryptor|
-		^super.new.acceptEvents_(acceptEvents).init(addrBook, oscPath, encryptor);
+	*new {|addrBook, mePeer, acceptEvents = false, oscPath = '/oscObjectSpace', encryptor|
+		^super.newCopyArgs.acceptEvents_(acceptEvents).init(addrBook, mePeer, oscPath, encryptor);
 	}
 
-	init {|argAddrBook, argOSCPath, argEncryptor|
+	init {|argAddrBook, argMePeer, argOSCPath, argEncryptor|
 		encryptor = argEncryptor ?? { NonEncryptor }; // NonEncryptor uses noops
-		super.init(argAddrBook, argOSCPath);
+		super.init(argAddrBook, argMePeer, argOSCPath);
 	}
 
 	makeOSCFunc {
-		oscFunc = OSCFunc({|msg, time, addr|
-			var key, val;
-			if(addrBook.addrs.includesEqual(addr), {
-				key = msg[1];
-				val = encryptor.decryptBytes(msg[2]).unarchive;
+		oscFunc = OSCFunc({|msg, time, addr, recvPort|
+			// recvPort is the wrong thing to use here - what we need is the sender's port
+			// probably have to provide this explicitly, as not given by address
+			var key, val, port;
+			# key, val, port = msg.drop(1);
+			if(addrBook.addrs.includesEqual(NetAddr(addr.ip, port)), {
+				val = encryptor.decryptBytes(val).unarchive;
 				if(acceptEvents || val.isKindOf(Event).not, {
 					dict[key] = val;
 					this.changed(\val, key, val);
 				}, { "OSCObjectSpace rejected event % from addr: %\n".format(val, addr).warn; });
 			}, {"OSCObjectSpace access attempt from unrecognised addr: %\n".format(addr).warn;});
-		}, oscPath, recvPort: addrBook.me.addr.port).fix;
+		}, oscPath, recvPort: mePeer.addr.port).fix;
 	}
 
 	getPairs { ^dict.asSortedArray.collect({|pair| [pair[0], encryptor.encryptBytes(pair[1].asBinaryArchive)]}).flatten }
 
 	updatePeers {|key, value|
-			addrBook.sendExcluding(addrBook.me.name, oscPath, key, encryptor.encryptBytes(value.asBinaryArchive));
+		addrBook.sendExcludingId(mePeer.id, oscPath, key, encryptor.encryptBytes(value.asBinaryArchive), mePeer.addr.port);
 	}
 
-	sync {|addr|
-		var syncAddr;
-		syncAddr = addr ?? { addrBook.peers.reject({|peer| peer == addrBook.me }).detect({|peer| peer.online }).addr }; // look for the first online one who's not me
-		syncAddr.notNil.if({
+	sync {|peerToSyncWith|
+		if (peerToSyncWith.isNil) {
+			// look for the first online one who's not me:
+			var peersExcludingSelf;
+			peersExcludingSelf = addrBook.peers.reject({|peer| peer == mePeer });
+			if (peersExcludingSelf.notEmpty) {
+				peerToSyncWith = peersExcludingSelf.detect({|peer| peer.online})
+			};
+		};
+		peerToSyncWith.notNil.if({
 			syncRecOSCFunc = OSCFunc({|msg, time, addr|
 				var pairs;
 				pairs = msg[1..];
@@ -237,8 +283,8 @@ OSCObjectSpace : AbstractOSCDataSpace {
 						this.changed(\val, key, val);
 					});
 				});
-			}, oscPath ++ "-sync-reply", syncAddr).oneShot;
-			syncAddr.sendMsg(oscPath ++ "-sync");
+			}, oscPath ++ "-sync-reply", recvPort: peerToSyncWith.addr.port).oneShot;
+			peerToSyncWith.addr.sendMsg(oscPath ++ "-sync", peerToSyncWith.addr.port);
 		});
 	}
 
