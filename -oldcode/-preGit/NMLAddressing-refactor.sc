@@ -328,7 +328,7 @@ NMLRegistrant {
 
 }
 
-NMLDecentralisedNode { // node, or peer?
+DecentralisedNode { // node, or peer?
 
 	var peerStartingPort, autoName, period, surviveCmdPeriod, verbose, hasGui;
 	var <addrBook;

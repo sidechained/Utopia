@@ -18,7 +18,7 @@
 // - when clients stop announcing, after time the server will note that the client is offline
 // - at this stage, the server should REPEATED let others know that this client is offline
 
-NMLRegistrar {
+CentralisedServer {
 
 	// new centralised approach:
 	// - clients start by creating a mePeer with a random ID
@@ -46,26 +46,6 @@ NMLRegistrar {
 	}
 
 	init {
-		this.checkForExistingServer;
-	}
-
-	checkForExistingServer {
-		inform("SERVER: checking for existing server...");
-		fork {
-			var announceServerResponder, serverFound;
-			serverFound = false;
-			announceServerResponder = OSCFunc({arg msg, time, addr;
-				serverFound = true;
-			}, '/server-announceServer').permanent_(surviveCmdPeriod);
-			(period * 2).wait;
-			announceServerResponder.free;
-			if (serverFound) { warn("cannot initialise server, another server is already running...") } {
-				warn("existing server not found, continuing as normal...");
-				this.existingServerNotFound };
-		};
-	}
-
-	existingServerNotFound {
 		addrBook = NMLAddrBook.new;
 		this.initAndStartEventLoop;
 		this.listenForAnnoucementsFromClients;
@@ -76,7 +56,7 @@ NMLRegistrar {
 		eventLoop = SkipJack({
 			this.announceServer;
 			this.checkIfClientsWentOffline;
-		}, period, name: \NMLRegistrar_eventLoop, clock: SystemClock); // NOTE: starts automatically
+		}, period, name: \centralisedServer_eventLoop, clock: SystemClock); // NOTE: starts automatically
 		if (surviveCmdPeriod.not) {
 			CmdPeriod.add({
 				eventLoop.stop;
@@ -162,7 +142,7 @@ NMLRegistrar {
 
 }
 
-NMLRegistrant {
+CentralisedClient {
 
 	var period, autoName, surviveCmdPeriod, verbose, hasGui;
 	var <addrBook;
@@ -231,7 +211,7 @@ NMLRegistrant {
 		eventLoop = SkipJack({
 			this.announceSelf;
 			this.checkIfServerWentOffline;
-		}, period, name: \NMLRegistrant_eventLoop ++ myId, clock: SystemClock, autostart: false); // don't start
+		}, period, name: \centralisedClient_eventLoop ++ myId, clock: SystemClock, autostart: false); // don't start
 		if (surviveCmdPeriod.not) {
 			CmdPeriod.add({
 				eventLoop.stop;
@@ -328,7 +308,7 @@ NMLRegistrant {
 
 }
 
-NMLDecentralisedNode { // node, or peer?
+DecentralisedNode { // node, or peer?
 
 	var peerStartingPort, autoName, period, surviveCmdPeriod, verbose, hasGui;
 	var <addrBook;

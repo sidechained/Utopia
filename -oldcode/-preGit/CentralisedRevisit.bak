@@ -1,0 +1,393 @@
+// DONE: ability to modify period
+
+CentralisedServer {
+
+	var serverPort, clientStartingPort, period;
+	var <addrBook;
+	var eventLoop;
+	var broadcastAddr;
+	var clientAnnounceClientResponder;
+
+	*new {arg serverPort = 50000, clientStartingPort = 60000, period = 1;
+		^super.newCopyArgs(serverPort, clientStartingPort, period).init;
+	}
+
+	init {
+		thisProcess.openUDPPort(serverPort);
+		addrBook = NMLAddrBook.new;
+		this.initBroadcastAddr;
+		this.initClientAnnounceClientResponder;
+		this.initAndStartEventLoop;
+	}
+
+	initBroadcastAddr {
+		NetAddr.broadcastFlag = true;
+		broadcastAddr = NMLNetAddrMP("255.255.255.255", 57120 + (0..7));
+	}
+
+	initClientAnnounceClientResponder {
+		clientAnnounceClientResponder = OSCFunc({arg msg, time, addr;
+			var id, name, client;
+			# id, name = msg.drop(1);
+			if (name == 0) { name = nil }; // correct OSC conversion of nil's to 0's
+			if (addrBook.ids.includes(id).not) { // if id is not already in address book
+				var tempClientId, permClientId, clientIp, clientPort;
+				tempClientId = id;
+				permClientId = addrBook.getNextFreeID;
+				clientIp = addr.ip;
+				clientPort = permClientId + clientStartingPort;
+				addr.sendMsg('/server-setClientID', tempClientId, permClientId, clientIp, clientPort);
+				// pause after this?
+				// MAKE NEW CLIENT WITH ID:
+				client = NMLPeer(
+					id: permClientId,
+					name: name, // if a name is provided at the automatic registration stage, it will be allocated here
+					addr: NetAddr(addr.ip, clientPort),
+					online: true,
+					lastResponse: time
+				);
+				// PROPOGATE THE CHANGES:
+				this.announceClientToItself(client);
+				this.announceClientToExistingClients(client);
+				this.announceExistingClientsToClient(client);
+				// finally, update the server's own address book
+				addrBook.add(client);
+			}
+			{
+				// RETRIEVE EXISTING CLIENT AT ID:
+				client = addrBook.atId(id);
+				client.name = name; // if a name is set manually (i.e. registration) it will be set as an update here
+				client.lastResponse = time;
+				// PROPOGATE THE CHANGES:
+				this.announceClientToItself(client);
+				this.announceClientToExistingClients(client);
+				this.announceExistingClientsToClient(client);
+			};
+		}, '/client-announceClient', recvPort: serverPort) // only accept messages targeted at server's port
+	}
+
+	initAndStartEventLoop {
+		eventLoop = Routine({
+			inf.do{
+				this.announceServer;
+				this.checkIfClientsOnline;
+				period.wait;
+			}
+		}).play(SystemClock)
+	}
+
+	announceServer {
+		broadcastAddr.sendMsg('/server-announceServer', serverPort);
+	}
+
+	announceClientToItself {arg client;
+		\sendingClientToSelf.postln;
+		client.postln;
+		client.addr.sendMsg('/server-announceClient', client.id, client.name, client.addr.ip, client.addr.port, client.lastResponse);
+	}
+
+	announceClientToExistingClients {arg client;
+		addrBook.sendAll('/server-announceClient', client.id, client.name, client.addr.ip, client.addr.port, client.lastResponse)
+	}
+
+	announceExistingClientsToClient {arg client;
+		addrBook.peers.do{arg peer;
+			client.addr.sendMsg('/server-announceClient', peer.id, peer.name, peer.addr.ip, peer.addr.port, peer.lastResponse);
+		}
+	}
+
+	checkIfClientsOnline {
+		var now;
+		now = Main.elapsedTime;
+		addrBook.peers.do{arg peer;
+			if ((now - peer.lastResponse) > (period * 2)) {
+				peer.online = false;
+				// peer.name = nil; // auto deregister
+				this.announceClientToExistingClients(peer); // tell all clients that this peer is offline
+			}
+		}
+	}
+
+	decommission {
+		// simulate a crash:
+		clientAnnounceClientResponder.free;
+		eventLoop.stop;
+		// reset all variables:
+		serverPort = nil;
+		clientStartingPort = nil;
+		addrBook = nil;
+		eventLoop = nil;
+		period = nil;
+		clientAnnounceClientResponder = nil;
+	}
+
+}
+
+CentralisedClient {
+
+	var autoName, period;
+	var <addrBook;
+	var eventLoop;
+	var serverAnnounceClientResponder, serverSetClientIDResponder, serverAnnounceServerResponder;
+	var <serverPeer;
+	var <me;
+
+	*new {arg autoName = false, period = 1;
+		^super.newCopyArgs(autoName, period).init;
+	}
+
+	init {
+		addrBook = NMLAddrBook.new;
+		this.initEventLoop;
+		this.initServerAnnounceServerResponder;
+	}
+
+	initEventLoop {
+		eventLoop = Routine({
+			inf.do{
+				this.announceMe;
+				this.checkIfServerOnline;
+				period.wait;
+			}
+		})
+	}
+
+	announceMe {
+		serverPeer.addr.sendMsg('/client-announceClient', me.id, me.name); // me.ip, me.port
+	}
+
+	initServerAnnounceServerResponder {
+		serverAnnounceServerResponder = OSCFunc({arg msg, time, addr;
+			var serverPort;
+			# serverPort = msg.drop(1);
+			if (serverPeer.isNil) {
+				// server comes online for the first time:
+				inform("server discovered at: %".format(addr));
+				serverPeer = NMLPeer(
+					addr: NetAddr(addr.ip, serverPort),
+					online: true,
+					lastResponse: time
+				);
+				// make me peer:
+				me = NMLPeer(id: rand2(-2147483647, 2147483647));
+				if (autoName) { // derive name from computer's name:
+					var computerName;
+					computerName = "whoami".unixCmdGetStdOut;
+					if(computerName.last == Char.nl, {computerName = computerName.drop(-1)});
+					me.name = computerName;
+				};
+				// start clientID responder:
+				this.initServerSetClientIDResponder;
+				// start the event loop (start sending 'me'):
+				eventLoop.play(SystemClock);
+			}
+			{
+				if (serverPeer.online.not) {
+					// server came back online (from being offline):
+					inform("server came back onine");
+					serverPeer.online = true;
+					serverPeer.lastResponse = time;
+					// start clientID responder:
+					this.initServerSetClientIDResponder;
+					// restart the event loop (resume sending 'me'):
+					eventLoop.play(SystemClock);
+				} {
+					// server already online (just update last response time)
+					//inform("server ping received, updating last response time");
+					serverPeer.lastResponse = time;
+				};
+			};
+		}, '/server-announceServer') // receiving broadcasts, no need to fix responder
+	}
+
+	serverWentOffline {
+		warn("server went offline");
+		serverPeer.online = false;
+		// when the server goes offline, stop listening...
+		serverAnnounceClientResponder.free;
+		serverSetClientIDResponder.free;
+		serverAnnounceServerResponder.free;
+		// and stop sending...
+		eventLoop.stop;
+	}
+
+	initServerSetClientIDResponder {
+		// SET UP WHEN SERVER HAS COME ONLINE
+		serverSetClientIDResponder = OSCFunc({arg msg, addr, time;
+			var tempID, permID, ip, port;
+			# tempID, permID, ip, port = msg.drop(1);
+			ip = ip.asString; // correct OSC conversion of ip string to symbol
+			if (me.id == tempID) {
+				me.id = permID;
+				me.addr = NetAddr(ip, port);
+			};
+			// open the new clients unique port (subsequent responders will fix to this port)
+			thisProcess.openUDPPort(port);
+			// start listening for other peers:
+			this.initServerAnnounceClientResponder;
+		}, '/server-setClientID') // srcID: serverPeer.addr recvPort: serverPeer.addr fix responder server addr + port (CHECK!)
+	}
+
+	initServerAnnounceClientResponder {
+		serverAnnounceClientResponder = OSCFunc({arg msg, time, addr;
+			var id, name, ip, port, lastResponse;
+			# id, name, ip, port, lastResponse = msg.drop(1);
+			if (name == 0) { name = nil }; // correct OSC conversion of nil's to 0's
+			ip = ip.asString; // correct OSC conversion of ip string to symbol
+			if (addrBook.ids.includes(id).not) { // if id doesn't exist in address book
+				var newPeer;
+				newPeer = NMLPeer(
+					id: id,
+					name: name,
+					addr: NetAddr(ip, port), // copy from server
+					online: true,
+					lastResponse: lastResponse // copy from server
+				);
+				addrBook.add(newPeer);
+			}
+			{
+				// if id does exist in address book
+				var existingPeer;
+				// no peers in address book here, why?
+				existingPeer = addrBook.atId(id);
+				existingPeer.name = name;
+				existingPeer.lastResponse = lastResponse; // copy from server
+			};
+		}, '/server-announceClient', recvPort: me.addr.port) // fix to the client's unique port
+	}
+
+	checkIfServerOnline {
+		var now;
+		now = Main.elapsedTime;
+		if ((now - serverPeer.lastResponse) > (period * 2)) {
+			this.serverWentOffline;
+		}
+	}
+
+	register {arg proposedName;
+		if (addrBook.names.includes(proposedName).not) { // if proposed name not in address book
+			me.name = proposedName;
+			this.announceMe; // immediate update
+		}
+	}
+
+	deregister {
+		if (addrBook.names.includes(me.name)) { // if client's name is in address book
+			me.name = nil;
+			this.announceMe; // immediate update
+		}
+	}
+
+	decommission {
+		// simulate a crash:
+		eventLoop.stop;
+		// - free responders:
+		serverAnnounceClientResponder.free;
+		serverSetClientIDResponder.free;
+		serverAnnounceServerResponder.free;
+		// - reset all variables:
+		autoName = nil;
+		period = nil;
+		addrBook = nil;
+		eventLoop = nil;
+		serverAnnounceClientResponder = nil;
+		serverSetClientIDResponder = nil;
+		serverAnnounceServerResponder = nil;
+		serverPeer = nil;
+		me = nil;
+	}
+
+}
+
+NMLPeer {
+
+	// need to add back in other stuff from original Utopia Peer Class
+
+	var <>id, <>name, <>addr, <>online, <>lastResponse;
+
+	*new {arg id, name, addr, online, lastResponse, autoName = false;
+		^super.newCopyArgs(id, name, addr, online, lastResponse).init(autoName);
+	}
+
+	init {arg autoName;
+		if (autoName) {
+			name = "whoami".unixCmdGetStdOut;
+			if(name.last == Char.nl, {name = name.drop(-1)});
+		};
+	}
+
+	printOn {arg stream;
+		// post pretty
+		stream << this.class.name << "(" <<* [name, id, addr, online, lastResponse] << ")"
+	}
+
+}
+
+// rethinking NMLAddrBook to make ID the primary key
+
+NMLAddrBook {
+
+	// primary key is ID
+
+	var dict, <me;
+
+	*new { ^super.new.init }
+
+	init { dict = IdentityDictionary.new; }
+
+	sendId {|id ...msg| dict[id].addr.sendMsg(*msg) }
+
+	sendName {|name ...msg| this.atName(name).addr.sendMsg(*msg) }
+
+	sendAll {|...msg| dict.do({|peer| peer.addr.sendMsg(*msg); }); }
+
+	sendAllBundle {|time ...msg| dict.do({|peer| peer.addr.sendBundle(time, *msg); }); }
+
+	sendExcludingId {|id ...msg| dict.reject({|peer, peerId| peerId == id }).do({|peer| peer.addr.sendMsg(*msg); });}
+
+	sendExcludingName {|name ...msg| dict.reject({|peer, peerName| peerName == name }).do({|peer| peer.addr.sendMsg(*msg); });}
+
+	add {|peer| dict[peer.id] = peer; peer.addDependant(this); this.changed(\add, peer) }
+
+	// removed addMe method for now
+
+	at {|id| ^dict[id] }
+
+	atId {|id| ^this.at(id) }
+
+	atName {|name| ^dict.values.detect({|peer| peer.name == name }) }
+
+	remove {|peer| dict[peer.id] = nil; peer.removeDependant(this); this.changed(\remove, peer) }
+
+	removeAt {|id| this.remove(dict[id]) }
+
+	update {|changed, what| this.changed(what, changed) }
+
+	ids { ^dict.keys }
+
+	names { ^dict.collect({|peer| peer.name}) }
+
+	addrs { ^dict.values.collect({|peer| peer.addr }) }
+
+	peers { ^dict.values }
+
+	namedPeers { ^dict.reject({|peer| peer.name.isNil }).values }
+
+	registeredPeers { ^this.namedPeers }
+
+	onlinePeers { ^dict.reject({|peer| peer.online.not }).values }
+
+	onlineNamedPeers { ^dict.reject({|peer| peer.name.isNil || peer.online.not }).values }
+
+	onlineRegisteredPeers { ^this.registeredPeers }
+
+	getNextFreeID {
+		if (dict.keys.notEmpty) {
+			^dict.keys.maxItem + 1;
+		}
+		{
+			^0;
+		}
+	}
+
+}
