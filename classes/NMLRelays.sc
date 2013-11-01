@@ -1,16 +1,16 @@
 // for history, etc.
 CodeRelay {
-	var addrBook, <>post, oscPath, encryptor, codeDumpFunc, oscFunc;
+	var addrBook, mePeer, <>post, oscPath, encryptor, codeDumpFunc, oscFunc;
 
-	*new {|addrBook, post = false, oscPath = '/codeRelay', encryptor, codeDumpFunc|
-		^super.newCopyArgs(addrBook, post, oscPath, encryptor, codeDumpFunc).init;
+	*new {|addrBook, mePeer, post = false, oscPath = '/codeRelay', encryptor, codeDumpFunc|
+		^super.newCopyArgs(addrBook, mePeer, post, oscPath, encryptor, codeDumpFunc).init;
 	}
 
 	init {
 		var interpreter;
 		encryptor = encryptor ?? { NonEncryptor }; // NonEncryptor uses noops
 		codeDumpFunc = codeDumpFunc ? { |code|
-			addrBook.sendAll(oscPath, addrBook.me.name, encryptor.encryptText(code));
+			addrBook.sendAll(oscPath, mePeer.name, encryptor.encryptText(code)); // TODO: mePeer.name to mePeer.id?
 		};
 		interpreter = thisProcess.interpreter;
 		interpreter.codeDump = interpreter.codeDump.addFunc(codeDumpFunc);
@@ -19,17 +19,17 @@ CodeRelay {
 
 	makeOSCFunc {
 		oscFunc = OSCFunc({|msg, time, addr|
-			var name, code;
-			if(addrBook.addrs.includesEqual(addr), {
-				name = msg[1];
-				code = encryptor.decryptText(msg[2]);
+			var name, code, port;
+			# name, code, port = msg.drop(1);
+			code = encryptor.decryptText(code);
+			if(addrBook.addrs.includesEqual(NetAddr(addr.ip, port)), {
 				this.changed(\code, name, code);
 				if(post, {
 					(name.asString ++ ":\n" ++ code).postln;
 					Char.nl.post;
 				});
 			}, {"CodeRelay access attempt from unrecognised addr: %\n".format(addr).warn;});
-		}, oscPath, recvPort: addrBook.me.addr.port).fix;
+		}, oscPath, recvPort: mePeer.addr.port).fix;
 	}
 
 	free {
@@ -152,7 +152,7 @@ AbstractOSCDataSpace {
 		this.makeOSCFunc;
 	}
 
-	put {|key, value| dict[key] = value; this.changed(\val, key, value); this.updatePeers(key, value);}
+	put {|key, value| dict[key] = value; this.changed(\val, key, value); this.updatePeers(key, value, mePeer.addr.port);}
 
 	at {|key| ^dict[key] }
 
@@ -188,10 +188,9 @@ OSCDataSpace : AbstractOSCDataSpace {
 
 	makeOSCFunc {
 		oscFunc = OSCFunc({|msg, time, addr|
-			var key, val;
-			if(addrBook.addrs.includesEqual(addr), {
-				key = msg[1];
-				val = msg[2];
+			var key, val, port;
+			# key, val, port = msg.drop(1);
+			if(addrBook.addrs.includesEqual(NetAddr(addr.ip, port)), {
 				dict[key] = val;
 				this.changed(\val, key, val);
 			}, {"OSCDataSpace access attempt from unrecognised addr: %\n".format(addr).warn;});
@@ -200,11 +199,11 @@ OSCDataSpace : AbstractOSCDataSpace {
 
 	getPairs { ^dict.getPairs }
 
-	updatePeers {|key, value| addrBook.sendExcluding(addrBook.me.name, oscPath, key, value); }
+	updatePeers {|key, value| addrBook.sendExcludingId(mePeer.id, oscPath, key, value, mePeer.addr.port); }
 
 	sync {|addr|
 		var syncAddr;
-		syncAddr = addr ?? { addrBook.peers.reject({|peer| peer == addrBook.me }).detect({|peer| peer.online }).addr }; // look for the first online one who's not me
+		syncAddr = addr ?? { addrBook.peers.reject({|peer| peer == mePeer }).detect({|peer| peer.online }).addr }; // look for the first online one who's not me
 		syncAddr.notNil.if({
 			syncRecOSCFunc = OSCFunc({|msg, time, addr|
 				var pairs;
