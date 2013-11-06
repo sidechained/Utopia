@@ -334,8 +334,8 @@ NMLDecentralisedNode { // node, or peer?
 	var <addrBook;
 	var <myId, <myName, <myPort;
 	var broadcastAddr;
-	var eventLoop, eventLoopName;
-	var announcePeerResponder;
+	var announceSelfLoop, checkLastResponsesLoop;
+	var announceSelfResponder;
 	var reporter, gui;
 
 	*new {arg peerStartingPort = 50000, autoName = false, period = 1, surviveCmdPeriod = true, verbose = false, hasGui = false;
@@ -356,9 +356,9 @@ NMLDecentralisedNode { // node, or peer?
 			this.listenForAnnouncementsFromPeers;
 			(period * 2).wait;
 			myId = addrBook.getNextFreeID;
-			//this.checkAddSelf;
-			this.initEventLoop(myId);
-			eventLoop.play(SystemClock);
+			this.checkForSelf;
+			this.initAnnounceSelfLoop;
+			this.initCheckLastResponsesLoop;
 		};
 	}
 
@@ -392,22 +392,34 @@ NMLDecentralisedNode { // node, or peer?
 		broadcastAddr = NMLNetAddrMP("255.255.255.255", 57120 + (0..7));
 	}
 
-	initEventLoop {
-		eventLoop = SkipJack({
-			this.announcePeer;
-			this.checkIfPeersWentOffline;
-		}, period, name: \decentralisedNode_eventLoop ++ myId, clock: SystemClock, autostart: false); // don't start
+	initAnnounceSelfLoop {
+		announceSelfLoop = SkipJack({
+			\announcingSelf.postln;
+			this.announceSelf;
+		}, period, name: \decentralisedNode_announceSelfLoop ++ myId, clock: SystemClock, autostart: true);
 		if (surviveCmdPeriod.not) {
+			\announcingSelf.postln;
 			CmdPeriod.add({
-				eventLoop.stop;
+				announceSelfLoop.stop;
 		})};
 	}
 
-	announcePeer {
-		broadcastAddr.sendMsg('/announcePeer', myId, myName);
+	initCheckLastResponsesLoop {
+		checkLastResponsesLoop = SkipJack({
+			\checkingLastResponses.postln;
+			this.checkLastResponses;
+		}, period, name: \decentralisedNode_checkLastResponsesLoop ++ myId, clock: SystemClock, autostart: true);
+		if (surviveCmdPeriod.not) {
+			CmdPeriod.add({
+				checkLastResponsesLoop.stop;
+		})};
 	}
 
-	checkIfPeersWentOffline {
+	announceSelf {
+		broadcastAddr.sendMsg('/announceSelf', myId, myName);
+	}
+
+	checkLastResponses {
 		var now;
 		now = Main.elapsedTime;
 		addrBook.peers.do({arg peer;
@@ -426,7 +438,7 @@ NMLDecentralisedNode { // node, or peer?
 	}
 
 	listenForAnnouncementsFromPeers {
-		announcePeerResponder = OSCFunc({arg msg, time, addr;
+		announceSelfResponder = OSCFunc({arg msg, time, addr;
 			var id, name;
 			# id, name = msg.drop(1);
 			if (name == 0) { name = nil}; // reconvert;
@@ -460,36 +472,41 @@ NMLDecentralisedNode { // node, or peer?
 					addrBook.updatePeerLastResponse(existingPeer.id, time);
 				};
 			}
-		}, '/announcePeer').permanent_(surviveCmdPeriod);
+		}, '/announceSelf').permanent_(surviveCmdPeriod);
+	}
+
+	goOffline {
+		// stop sending, keep listening
+		announceSelfLoop.stop;
 	}
 
 	decommission {
-		// simulate a crash
+		// stop sending, stop listening (simulate a crash)
 		gui !? { gui.destroy };
 		reporter !? { reporter.decommission };
-		announcePeerResponder.free; // stop listening
-		eventLoop.stop; // stop sending
+		announceSelfResponder.free; // stop listening
+		announceSelfLoop.stop;
+		checkLastResponsesLoop.stop; // stop sending
 	}
 
 	me {
 		^addrBook.atId(myId) ?? { warn("me not yet in address book") };
 	}
 
-	/*	checkAddSelf {
-	addrBook.addDependant({arg addrBook, what, peer;
-	if (peer.id == id) {
-	case
-	{ what == \add } {
-	\selfAddedToAddrBook.postln;
-	// trigger auto registration
-	if (autoName) { this.register(this.getComputerName); };
+	checkForSelf {
+		addrBook.addDependant({arg addrBook, what, peer;
+			if (peer.id == myId) {
+				case
+				{ what == \add } {
+					\selfAddedToAddrBook.postln;
+					this.me.postln;
+				}
+				{ what == \remove } {
+					\selfRemovedFromAddrBook.postln;
+				}
+			}
+		});
 	}
-	/*				{ what == \remove } {
-	\selfRemovedFromAddrBook.postln;
-	}*/
-	}
-	});
-	}*/
 
 }
 
@@ -835,3 +852,35 @@ NMLAddrBookGUI {
 
 }
 
+// implements a NetAddr that can have multiple ports...
+// this is the same as in Republic, but we duplicate here for now in order to avoid the dependancy
+NMLNetAddrMP : NetAddr {
+
+        var <>ports;
+
+        *new { arg hostname, ports;
+                ports = ports.asArray;
+                ^super.new(hostname, ports.first).ports_(ports)
+        }
+
+        sendRaw{ arg rawArray;
+                ports.do{ |it|
+                        this.port_( it );
+                        ^super.sendRaw( rawArray );
+                }
+        }
+
+        sendMsg { arg ... args;
+                ports.do{ |it|
+                        this.port_( it );
+                        super.sendMsg( *args );
+                }
+        }
+
+        sendBundle { arg time ... args;
+                ports.do{ |it|
+                        this.port_( it );
+                        super.sendBundle( *([time]++args) );
+                }
+        }
+}
