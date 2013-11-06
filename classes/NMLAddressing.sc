@@ -480,7 +480,7 @@ NMLDecentralisedNode { // node, or peer?
 		announceSelfLoop.stop;
 	}
 
-	decommission {
+	kill {
 		// stop sending, stop listening (simulate a crash)
 		gui !? { gui.destroy };
 		reporter !? { reporter.decommission };
