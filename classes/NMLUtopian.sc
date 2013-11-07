@@ -35,28 +35,30 @@ NMLUtopian {
 	// sharedServerAddresses is an OSCObjectSpace of synced remote addresses and should not be accessible to the user
 	// servers is the user-friendly list of servers, built on top of sharedServerAdddresses and within this the local players server will always have a local address
 
-	var topology, isRegistrar, isRegistrant, verbose, hasAddrBookGui, hasServer, seesServers, sharesSynthDefs;
+	var topology, isRegistrar, isRegistrant, verbose, hasAddrBookGui, hasServer, seesServers, sharesSynthDefs, doWhenMeAdded, doWhenBooted;
 	var <node, <registrar;
 	var <server;
 	var serverStartingPort = 10000; // 80000 doesnt work, lower numbers seem better for some reason
 	var <servers, <sharedServerAddrs;
 	var synthDescRelay;
 
-	*new {arg topology = \decentralised, isRegistrar = false, isRegistrant = false, verbose = false, hasAddrBookGui = false, hasServer = true, seesServers = true, sharesSynthDefs = true;
-		^super.newCopyArgs(topology, isRegistrar, isRegistrant, verbose, hasAddrBookGui, hasServer, seesServers, sharesSynthDefs).init
+	*new {arg topology = \decentralised, isRegistrar = false, isRegistrant = false, verbose = false, hasAddrBookGui = false, hasServer = true, seesServers = true, sharesSynthDefs = true, doWhenMeAdded, doWhenBooted;
+		^super.newCopyArgs(topology, isRegistrar, isRegistrant, verbose, hasAddrBookGui, hasServer, seesServers, sharesSynthDefs, doWhenMeAdded, doWhenBooted).init
 	}
 
 	init {
 		// add functionality based on incoming args:
 		case
-		{ topology == \decentralised } { node = DecentralisedNode.new(verbose: verbose, hasGui: hasAddrBookGui); }
+		{ topology == \decentralised } { node = NMLDecentralisedNode.new(verbose: verbose, hasGui: hasAddrBookGui, doWhenMeAdded: doWhenMeAdded); }
 		{ topology == \centralised } {
-			if (isRegistrar) { registrar = CentralisedServer.new; };
-			if (isRegistrant) { node = CentralisedClient.new(verbose: verbose, hasGui: hasAddrBookGui); };
+			if (isRegistrar) { registrar = NMLRegistrar.new; };
+			if (isRegistrant) { node = NMLRegistrant.new(verbose: verbose, hasGui: hasAddrBookGui); };
 			if (isRegistrar.not && isRegistrant.not) { warn("neither registrar or registrant"); };
 		};
 		if (hasServer) { this.initServerAddrBookDependencies; };
 	}
+
+
 
 	// access to implementing topology: polymorphism
 
@@ -108,6 +110,7 @@ NMLUtopian {
 		//Main.interpreter.s = Server.default; // doesn't work for now
 		fork {
 			inform("booting local server...");
+			server.doWhenBooted(doWhenBooted);
 			server.boot;
 			server.bootSync;
 			if (seesServers) { this.initSharedServerAddrs; };

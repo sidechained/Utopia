@@ -13,13 +13,13 @@
 
 // TESTS:
 // - if all the above holds true, the following code should work on a single machine (please check)
-// - please experiment with all the initialisation arguments for DecentralisedNode, NMLRegistrar and NMLRegistrant.
+// - please experiment with all the initialisation arguments for NMLDecentralisedNode, NMLRegistrar and NMLRegistrant.
 // - cmdPeriod should not destroy the network
 
 // ** DECENTRALISED NETWORKING
 
 // create a single peer:
-a = DecentralisedNode(autoName: false, verbose: true, hasGui: true);
+a = NMLDecentralisedNode(autoName: false, verbose: true, hasGui: true);
 a.register(\peerA); // give peer a name
 a.deregister; // set name back to nil
 a.decommission; // simulate a crash
@@ -33,7 +33,7 @@ a.myPort;
 a.me; // 'me' should exist only once peer has come online for first time
 
 // and another peer:
-b = DecentralisedNode(autoName: false, verbose: true, hasGui: true);
+b = NMLDecentralisedNode(autoName: false, verbose: true, hasGui: true);
 b.register(\peerB); // give peer a name
 b.deregister; // set name back to nil
 b.decommission; // simulate a crash

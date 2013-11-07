@@ -330,17 +330,16 @@ NMLRegistrant {
 
 NMLDecentralisedNode { // node, or peer?
 
-	var peerStartingPort, autoName, period, surviveCmdPeriod, verbose, hasGui;
+	var peerStartingPort, autoName, period, surviveCmdPeriod, verbose, hasGui, doWhenMeAdded;
 	var <addrBook;
 	var <myId, <myName, <myPort;
 	var broadcastAddr;
 	var announceSelfLoop, checkLastResponsesLoop;
 	var announceSelfResponder;
 	var reporter, gui;
-	var >doWhenMeAddedFunc;
 
-	*new {arg peerStartingPort = 50000, autoName = false, period = 1, surviveCmdPeriod = true, verbose = false, hasGui = false;
-		^super.newCopyArgs(peerStartingPort, autoName, period, surviveCmdPeriod, verbose, hasGui).init;
+	*new {arg peerStartingPort = 50000, autoName = false, period = 1, surviveCmdPeriod = true, verbose = false, hasGui = false, doWhenMeAdded;
+		^super.newCopyArgs(peerStartingPort, autoName, period, surviveCmdPeriod, verbose, hasGui, doWhenMeAdded).init;
 	}
 
 	init {
@@ -499,7 +498,8 @@ NMLDecentralisedNode { // node, or peer?
 				case
 				{ what == \add } {
 					// \selfAddedToAddrBook.postln;
-					doWhenMeAddedFunc !? {doWhenMeAddedFunc.value};
+					addrBook.postln;
+					doWhenMeAdded !? {doWhenMeAdded.value};
 				}
 /*				{ what == \wentOffline } {
 					\selfWentOffline.postln;

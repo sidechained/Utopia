@@ -1,7 +1,7 @@
 // extensions to AddrBook for a rewrite of Republic
 // doesn't work yet, probably because Hail class still makes a Peer.
 
-RepPeer : Peer {
+RepPeer : NMLPeer {
 	var <server;
 	var <location;
 
@@ -12,7 +12,7 @@ RepPeer : Peer {
 }
 
 
-RepAddrBook : AddrBook {
+RepAddrBook : NMLAddrBook {
 
 	var <nameList;
 	var <groups;
