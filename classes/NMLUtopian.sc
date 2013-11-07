@@ -79,6 +79,7 @@ NMLUtopian {
 	initServerAddrBookDependencies {
 		// once node's own appears in the address book
 		node.addrBook.addDependant({arg addrBook, what, who;
+			[addrBook, what, who].postln;
 			if (what == \cameOnline) {
 				if (who.id == node.myId) {
 					if (server.isNil) {
@@ -86,7 +87,7 @@ NMLUtopian {
 						this.addLocalServer;
 					}
 					{
-						inform("connecting to existing local server - not implemented");
+						inform("connecting to existing local server - not yet implemented");
 						// what if node id has changed?
 						//this.useExistingServer;
 					}
@@ -111,7 +112,6 @@ NMLUtopian {
 		fork {
 			inform("booting local server...");
 			server.doWhenBooted(doWhenBooted);
-			server.boot;
 			server.bootSync;
 			if (seesServers) { this.initSharedServerAddrs; };
 			if (sharesSynthDefs) {	this.initSynthDescRelay; };
