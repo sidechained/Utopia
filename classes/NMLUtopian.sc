@@ -1,4 +1,4 @@
-Utopian {
+NMLUtopian {
 
 	// a node which can be many things
 	// interface to a network, with cherries on top (server)
