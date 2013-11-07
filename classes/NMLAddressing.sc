@@ -155,7 +155,7 @@ NMLRegistrar {
 		broadcastAddr.sendMsg('\server-announceServer', serverPort);
 	}
 
-	decommission {
+	kill {
 		clientAnnouncementResponder.free;
 		eventLoop.stop;
 	}
@@ -311,10 +311,10 @@ NMLRegistrant {
 		}
 	}
 
-	decommission {
+	kill {
 		// simulate a crash:
 		gui !? { gui.destroy };
-		reporter !? { reporter.decommission };
+		reporter !? { reporter.kill };
 		announceServerResponder.free;
 		setIdResponder.free;
 		announceClientResponder.free;
@@ -337,6 +337,7 @@ NMLDecentralisedNode { // node, or peer?
 	var announceSelfLoop, checkLastResponsesLoop;
 	var announceSelfResponder;
 	var reporter, gui;
+	var >doWhenMeAddedFunc;
 
 	*new {arg peerStartingPort = 50000, autoName = false, period = 1, surviveCmdPeriod = true, verbose = false, hasGui = false;
 		^super.newCopyArgs(peerStartingPort, autoName, period, surviveCmdPeriod, verbose, hasGui).init;
@@ -356,7 +357,7 @@ NMLDecentralisedNode { // node, or peer?
 			this.listenForAnnouncementsFromPeers;
 			(period * 2).wait;
 			myId = addrBook.getNextFreeID;
-			this.checkForSelf;
+			this.monitorSelf;
 			this.initAnnounceSelfLoop;
 			this.initCheckLastResponsesLoop;
 		};
@@ -394,11 +395,10 @@ NMLDecentralisedNode { // node, or peer?
 
 	initAnnounceSelfLoop {
 		announceSelfLoop = SkipJack({
-			\announcingSelf.postln;
+			// \announcingSelf.postln;
 			this.announceSelf;
 		}, period, name: \decentralisedNode_announceSelfLoop ++ myId, clock: SystemClock, autostart: true);
 		if (surviveCmdPeriod.not) {
-			\announcingSelf.postln;
 			CmdPeriod.add({
 				announceSelfLoop.stop;
 		})};
@@ -406,7 +406,7 @@ NMLDecentralisedNode { // node, or peer?
 
 	initCheckLastResponsesLoop {
 		checkLastResponsesLoop = SkipJack({
-			\checkingLastResponses.postln;
+			// \checkingLastResponses.postln;
 			this.checkLastResponses;
 		}, period, name: \decentralisedNode_checkLastResponsesLoop ++ myId, clock: SystemClock, autostart: true);
 		if (surviveCmdPeriod.not) {
@@ -483,7 +483,7 @@ NMLDecentralisedNode { // node, or peer?
 	kill {
 		// stop sending, stop listening (simulate a crash)
 		gui !? { gui.destroy };
-		reporter !? { reporter.decommission };
+		reporter !? { reporter.kill };
 		announceSelfResponder.free; // stop listening
 		announceSelfLoop.stop;
 		checkLastResponsesLoop.stop; // stop sending
@@ -493,17 +493,21 @@ NMLDecentralisedNode { // node, or peer?
 		^addrBook.atId(myId) ?? { warn("me not yet in address book") };
 	}
 
-	checkForSelf {
+	monitorSelf {
 		addrBook.addDependant({arg addrBook, what, peer;
 			if (peer.id == myId) {
 				case
 				{ what == \add } {
-					\selfAddedToAddrBook.postln;
-					this.me.postln;
+					// \selfAddedToAddrBook.postln;
+					doWhenMeAddedFunc !? {doWhenMeAddedFunc.value};
+				}
+/*				{ what == \wentOffline } {
+					\selfWentOffline.postln;
 				}
 				{ what == \remove } {
+					// this will never happen (no peers are ever removed)
 					\selfRemovedFromAddrBook.postln;
-				}
+				}*/
 			}
 		});
 	}
@@ -568,7 +572,9 @@ NMLAddrBook {
 		dict[peer.id] = peer;
 		peer.addDependant(this);
 		this.changed(\add, peer);
-		peer.online !? { if (peer.online) { this.changed(\cameOnline, peer) }; };
+		//peer.online !? {
+		if (peer.online) { this.changed(\cameOnline, peer) };
+		//};
 		if (peer.name.notNil) { this.changed(\registeredName, peer) };
 		if (peer.lastResponse.notNil) { this.changed(\updatedLastResponseTime, peer) };
 	}
@@ -576,7 +582,9 @@ NMLAddrBook {
 	remove {|peer|
 		dict[peer.id] = nil;
 		peer.removeDependant(this);
-		peer.online !? { if (peer.online) { this.changed(\wentOffline, peer) }; };
+//		peer.online !? {
+		if (peer.online) { this.changed(\wentOffline, peer) };
+//		};
 		if (peer.name.notNil) { this.changed(\deregisteredName, peer) };
 		this.changed(\remove, peer)
 	}
@@ -698,7 +706,7 @@ NMLAddrBookReporter {
 		addrBook.addDependant(dependancyFunc)
 	}
 
-	decommission {
+	kill {
 		addrBook.removeDependant(dependancyFunc);
 		addrBook = nil;
 	}
