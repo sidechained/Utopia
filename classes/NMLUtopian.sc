@@ -1,5 +1,7 @@
 NMLUtopian {
 
+	// update
+
 	// a node which can be many things
 	// interface to a network, with cherries on top (server)
 	// and ability to add own functionality
@@ -79,7 +81,6 @@ NMLUtopian {
 	initServerAddrBookDependencies {
 		// once node's own appears in the address book
 		node.addrBook.addDependant({arg addrBook, what, who;
-			[addrBook, what, who].postln;
 			if (what == \cameOnline) {
 				if (who.id == node.myId) {
 					if (server.isNil) {

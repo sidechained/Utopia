@@ -498,7 +498,6 @@ NMLDecentralisedNode { // node, or peer?
 				case
 				{ what == \add } {
 					// \selfAddedToAddrBook.postln;
-					addrBook.postln;
 					doWhenMeAdded !? {doWhenMeAdded.value};
 				}
 /*				{ what == \wentOffline } {
@@ -564,7 +563,7 @@ NMLAddrBook {
 
 	sendAllBundle {|time ...msg| dict.do({|peer| peer.addr.sendBundle(time, *msg); }); }
 
-	sendExcludingId {|id ...msg| dict.reject({|peer, peerId| peerId == id }).postln.do({|peer| peer.addr.sendMsg(*msg); });}
+	sendExcludingId {|id ...msg| dict.reject({|peer, peerId| peerId == id }).do({|peer| peer.addr.sendMsg(*msg); });}
 
 	sendExcludingName {|name ...msg| dict.reject({|peer, peerName| peerName == name }).do({|peer| peer.addr.sendMsg(*msg); });}
 
